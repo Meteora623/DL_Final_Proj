@@ -16,7 +16,6 @@ def build_mlp(layers_dims: List[int]):
 class Encoder(nn.Module):
     def __init__(self, repr_dim=256):
         super().__init__()
-        # Convolution layers as before
         self.conv_layers = nn.Sequential(
             nn.Conv2d(2, 32, kernel_size=3, stride=2, padding=1),
             nn.BatchNorm2d(32),
@@ -31,15 +30,11 @@ class Encoder(nn.Module):
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
         )
-
-        # If final feature map is 5x5 instead of 4x4, total features = 256*5*5 = 6400
-        # Adjust accordingly:
-        self.fc = nn.Linear(256 * 5 * 5, repr_dim)
+        # Adjusted for a 5x5 final map:
+        self.fc = nn.Linear(256*5*5, repr_dim)
 
     def forward(self, x):
-        # x: [B, C, H, W]
         x = self.conv_layers(x)
-        # Now x might be [B, 256, 5, 5] = 6400 features
         batch_size = x.size(0)
         x = x.view(batch_size, -1)
         x = self.fc(x)
@@ -86,13 +81,10 @@ class JEPA_Model(nn.Module):
             param_k.data = param_k.data * momentum + param_q.data * (1.0 - momentum)
 
     def forward(self, states, actions):
-        # states: [B, T, C, H, W]
-        # actions: [B, T-1, 2]
         B, T_state, C, H, W = states.shape
         T = actions.shape[1] + 1
         pred_encs = []
 
-        # Encode initial state
         s_t = self.encoder(states[:, 0].to(self.device))
         pred_encs.append(s_t)
 
@@ -104,3 +96,23 @@ class JEPA_Model(nn.Module):
 
         pred_encs = torch.stack(pred_encs, dim=0)  # [T, B, D]
         return pred_encs
+
+class Prober(nn.Module):
+    def __init__(self, embedding: int, arch: str, output_shape: List[int]):
+        super().__init__()
+        self.output_dim = np.prod(output_shape)
+        self.output_shape = output_shape
+        self.arch = arch
+
+        arch_list = list(map(int, arch.split("-"))) if arch != "" else []
+        f = [embedding] + arch_list + [self.output_dim]
+        layers = []
+        for i in range(len(f) - 2):
+            layers.append(nn.Linear(f[i], f[i + 1]))
+            layers.append(nn.ReLU(True))
+        layers.append(nn.Linear(f[-2], f[-1]))
+        self.prober = nn.Sequential(*layers)
+
+    def forward(self, e):
+        output = self.prober(e)
+        return output
