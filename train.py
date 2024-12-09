@@ -1,17 +1,17 @@
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
-import numpy as np
 from torch.utils.data import DataLoader
-from dataset import WallDataset, create_wall_dataloader
+import numpy as np
+import os
+
+from dataset import WallDataset
 from models import JEPA_Model
 from normalizer import Normalizer
 
-import os
-
 class TrainConfig:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    data_path = '/scratch/DL24FA/train'
+    data_path = '/scratch/DL24FA/train'  # Path to your training data
     batch_size = 64
     num_workers = 4
     lr = 1e-3
@@ -22,20 +22,15 @@ class TrainConfig:
 
 def compute_loss(pred_encs, target_encs):
     """
-    Compute a BYOL-like loss:
-    We use a cosine similarity-based loss.
-    
+    Compute a BYOL-like loss using cosine similarity.
     pred_encs: [T, B, D]
-    target_encs: [T, B, D] (detached)
+    target_encs: [T, B, D]
     """
-    # Flatten T and B for convenience
     T, B, D = pred_encs.shape
     pred = pred_encs.view(T*B, D)
-    target = target_encs.view(T*B, D)
-    target = target.detach()  # Stop gradients on target
+    target = target_encs.view(T*B, D).detach()
 
-    # Cosine similarity loss
-    # cos_sim in [-1,1], we want to maximize cos_sim (minimize 2 - 2*cos_sim)
+    # Cosine similarity
     cos_sim = F.cosine_similarity(pred, target, dim=-1).mean()
     loss = 2 - 2 * cos_sim
     return loss
@@ -43,13 +38,13 @@ def compute_loss(pred_encs, target_encs):
 def main():
     config = TrainConfig()
 
-    # Create the training dataset and dataloader
-    # probing=False since we just need states and actions for training JEPA
-    # augment=False here; you can set True if you want to apply image augmentation
+    # Create the training dataset
+    # probing=False since we do not need locations for JEPA training
+    # augment=False here; enable if you want to apply image augmentation
     train_dataset = WallDataset(
         data_path=config.data_path,
         probing=False,
-        device='cpu',    # Load data on CPU and then move to GPU in training loop
+        device='cpu',   # Load on CPU first
         augment=False
     )
 
@@ -62,7 +57,7 @@ def main():
         num_workers=config.num_workers
     )
 
-    # Initialize JEPA Model
+    # Initialize the JEPA model
     model = JEPA_Model(
         repr_dim=config.repr_dim,
         action_dim=config.action_dim,
@@ -71,7 +66,7 @@ def main():
 
     optimizer = optim.Adam(model.parameters(), lr=config.lr)
 
-    # Normalizer (if you need it for debugging or special normalization)
+    # Normalizer (if needed for debugging or special normalization)
     normalizer = Normalizer()
 
     model.train()
@@ -79,21 +74,21 @@ def main():
     for epoch in range(config.epochs):
         epoch_loss = 0.0
         for batch_idx, batch in enumerate(train_loader):
-            # batch.states: [B, T, C, H, W]
-            # batch.actions: [B, T-1, 2]
-            # batch.locations: empty since probing=False
+            # states: [B, T, C, H, W]
+            # actions: [B, T-1, 2], locations empty since probing=False
+            states = batch.states  # on CPU
+            actions = batch.actions # on CPU
 
-            # Move states and actions to device
-            states = batch.states.to(config.device)   # [B, T, C, H, W]
-            actions = batch.actions.to(config.device) # [B, T-1, 2]
+            # Move data to device
+            states = states.to(config.device)
+            actions = actions.to(config.device)
 
             optimizer.zero_grad()
 
-            # Forward pass
+            # Forward pass through the online model
             pred_encs = model(states, actions)  # [T, B, D]
 
-            # Get target embeddings using the target encoder
-            # For each time step t, encode observation o_t using target encoder
+            # Compute target embeddings using the target encoder
             B, T_state, C, H, W = states.shape
             T = actions.shape[1] + 1
             target_encs_list = []
@@ -106,11 +101,11 @@ def main():
             # Compute loss
             loss = compute_loss(pred_encs, target_encs)
 
-            # Backprop and optimize
+            # Backprop and update
             loss.backward()
             optimizer.step()
 
-            # Update target encoder
+            # Update the target encoder
             model.update_target_encoder(momentum=0.99)
 
             epoch_loss += loss.item()
