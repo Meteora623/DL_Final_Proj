@@ -15,7 +15,7 @@ class TrainConfig:
     batch_size = 64
     num_workers = 4
     lr = 1e-3
-    epochs = 10
+    epochs = 1
     repr_dim = 256
     action_dim = 2
     model_weights_path = 'model_weights.pth'
