@@ -30,8 +30,8 @@ class Encoder(nn.Module):
             nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
         )
-        # 256 * 5 * 5 = 6400 if final map is 5x5
-        self.fc = nn.Linear(256 * 5 * 5, repr_dim)
+        # Assuming final feature map is 5x5:
+        self.fc = nn.Linear(256*5*5, repr_dim)
 
     def forward(self, x):
         x = self.conv_layers(x)
@@ -100,14 +100,12 @@ class JEPA_Model(nn.Module):
 class Prober(nn.Module):
     def __init__(self, embedding: int, arch: str, output_shape: List[int]):
         super().__init__()
-        # Ensure integers
         self.output_dim = int(np.prod(output_shape))
         embedding = int(embedding)
-
         arch_list = list(map(int, arch.split("-"))) if arch != "" else []
-        arch_list = [int(a) for a in arch_list]  # ensure ints
+        arch_list = [int(a) for a in arch_list]
         f = [embedding] + arch_list + [self.output_dim]
-        f = [int(x) for x in f]  # ensure all are ints
+        f = [int(x) for x in f]
 
         layers = []
         for i in range(len(f) - 2):
