@@ -26,7 +26,7 @@ class WallDataset:
         else:
             self.locations = None
 
-        # Adjust these transforms as needed or remove them if causing issues
+        # Basic augmentations if needed
         self.augmentation_transforms = transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomVerticalFlip(p=0.5),
@@ -36,14 +36,13 @@ class WallDataset:
         return len(self.states)
 
     def __getitem__(self, i):
-        # Copy the array to avoid the non-writable warning
-        state_np = self.states[i].copy()  # [T, C, H, W]
-        action_np = self.actions[i].copy() # [T-1, 2]
+        state_np = self.states[i].copy()   # copy to avoid non-writable warning
+        action_np = self.actions[i].copy() # same reason
 
         states = torch.from_numpy(state_np).float()  # CPU tensor
         actions = torch.from_numpy(action_np).float() # CPU tensor
 
-        # Apply augmentation if enabled
+        # Augment if desired
         if self.augment:
             augmented_states = []
             for frame in states:
@@ -51,7 +50,7 @@ class WallDataset:
                 augmented_states.append(frame)
             states = torch.stack(augmented_states)
 
-        # Move to device after augmentation
+        # Move to device
         states = states.to(self.device)
         actions = actions.to(self.device)
 
