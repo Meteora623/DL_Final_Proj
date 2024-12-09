@@ -35,7 +35,7 @@ def main():
     train_dataset = WallDataset(
         data_path=config.data_path,
         probing=False,
-        device='cpu',   # Load on CPU
+        device='cpu',
         augment=False
     )
 
@@ -62,9 +62,8 @@ def main():
     for epoch in range(config.epochs):
         epoch_loss = 0.0
         for batch_idx, batch in enumerate(train_loader):
-            states = batch.states # CPU
+            states = batch.states  # CPU
             actions = batch.actions # CPU
-
             states = states.to(config.device)
             actions = actions.to(config.device)
 
