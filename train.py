@@ -11,7 +11,7 @@ from normalizer import Normalizer
 
 class TrainConfig:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    data_path = '/scratch/DL24FA/train'  # Ensure this path exists and data is correct
+    data_path = '/scratch/DL24FA/train'
     batch_size = 64
     num_workers = 4
     lr = 1e-3
@@ -32,11 +32,10 @@ def compute_loss(pred_encs, target_encs):
 def main():
     config = TrainConfig()
 
-    # Create dataset and dataloader
     train_dataset = WallDataset(
         data_path=config.data_path,
         probing=False,
-        device='cpu',   # Load on CPU first
+        device='cpu',   # Load on CPU
         augment=False
     )
 
@@ -63,17 +62,15 @@ def main():
     for epoch in range(config.epochs):
         epoch_loss = 0.0
         for batch_idx, batch in enumerate(train_loader):
-            states = batch.states  # CPU tensor
-            actions = batch.actions # CPU tensor
+            states = batch.states # CPU
+            actions = batch.actions # CPU
 
-            # Move to device
             states = states.to(config.device)
             actions = actions.to(config.device)
 
             optimizer.zero_grad()
             pred_encs = model(states, actions)  # [T, B, D]
 
-            # Compute target embeddings
             B, T_state, C, H, W = states.shape
             T = actions.shape[1] + 1
             target_encs_list = []
@@ -81,12 +78,11 @@ def main():
                 for t in range(T):
                     s_prime_t = model.target_encoder(states[:, t])
                     target_encs_list.append(s_prime_t)
-            target_encs = torch.stack(target_encs_list, dim=0)  # [T, B, D]
+            target_encs = torch.stack(target_encs_list, dim=0) # [T, B, D]
 
             loss = compute_loss(pred_encs, target_encs)
             loss.backward()
             optimizer.step()
-
             model.update_target_encoder(momentum=0.99)
 
             epoch_loss += loss.item()
