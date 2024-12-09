@@ -1,7 +1,7 @@
 import torch
 from configs import ConfigBase
 from evaluator import ProbingEvaluator, ProbingConfig
-from dataset import WallDataset
+from dataset import create_wall_dataloader
 
 class MainConfig(ConfigBase):
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -17,9 +17,33 @@ def load_data(config):
     probe_normal_val_path = '/scratch/DL24FA/probe_normal/val/'
     probe_wall_val_path = '/scratch/DL24FA/probe_wall/val/'
 
-    probe_train_ds = WallDataset(probe_train_path, probing=True, device='cpu')
-    probe_normal_val_ds = WallDataset(probe_normal_val_path, probing=True, device='cpu', augment=False)
-    probe_wall_val_ds = WallDataset(probe_wall_val_path, probing=True, device='cpu', augment=False)
+    # Create DataLoaders instead of raw datasets
+    probe_train_ds = create_wall_dataloader(
+        data_path=probe_train_path,
+        probing=True,
+        device='cpu',
+        batch_size=config.batch_size,
+        train=True,
+        augment=False
+    )
+
+    probe_normal_val_ds = create_wall_dataloader(
+        data_path=probe_normal_val_path,
+        probing=True,
+        device='cpu',
+        batch_size=config.batch_size,
+        train=False,
+        augment=False
+    )
+
+    probe_wall_val_ds = create_wall_dataloader(
+        data_path=probe_wall_val_path,
+        probing=True,
+        device='cpu',
+        batch_size=config.batch_size,
+        train=False,
+        augment=False
+    )
 
     probe_val_ds = {
         'normal': probe_normal_val_ds,
@@ -30,8 +54,6 @@ def load_data(config):
 
 def load_model(config):
     """Load or initialize the model."""
-    ################################################################################
-    # TODO: Initialize and load your model
     from models import JEPA_Model
     model = JEPA_Model(
         repr_dim=config.repr_dim,
@@ -40,7 +62,6 @@ def load_model(config):
     ).to(config.device)
     model.load_state_dict(torch.load(config.model_weights_path, map_location=config.device))
     model.eval()
-    ################################################################################
     return model
 
 def evaluate_model():
@@ -52,8 +73,8 @@ def evaluate_model():
     evaluator = ProbingEvaluator(
         device=config.device,
         model=model,
-        probe_train_ds=probe_train_ds,
-        probe_val_ds=probe_val_ds,
+        probe_train_ds=probe_train_ds,  # DataLoader now
+        probe_val_ds=probe_val_ds,      # Dict of DataLoaders now
         config=ProbingConfig(),
         quick_debug=False,
     )
