@@ -24,7 +24,7 @@ def load_data(config):
         device='cpu',
         batch_size=config.batch_size,
         train=True,
-        augment=False
+        #augment=False
     )
 
     probe_normal_val_ds = create_wall_dataloader(
@@ -33,7 +33,7 @@ def load_data(config):
         device='cpu',
         batch_size=config.batch_size,
         train=False,
-        augment=False
+        #augment=False
     )
 
     probe_wall_val_ds = create_wall_dataloader(
@@ -42,7 +42,7 @@ def load_data(config):
         device='cpu',
         batch_size=config.batch_size,
         train=False,
-        augment=False
+        #augment=False
     )
 
     probe_val_ds = {
