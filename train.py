@@ -36,7 +36,7 @@ def main():
         data_path=config.data_path,
         probing=False,
         device='cpu',
-        augment=False
+        #augment=False
     )
 
     train_loader = DataLoader(
