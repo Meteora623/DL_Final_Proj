@@ -17,14 +17,13 @@ def load_data(config):
     probe_normal_val_path = '/scratch/DL24FA/probe_normal/val/'
     probe_wall_val_path = '/scratch/DL24FA/probe_wall/val/'
 
-    # Create DataLoaders instead of raw datasets
     probe_train_ds = create_wall_dataloader(
         data_path=probe_train_path,
         probing=True,
         device='cpu',
         batch_size=config.batch_size,
         train=True,
-        #augment=False
+        augment=False
     )
 
     probe_normal_val_ds = create_wall_dataloader(
@@ -33,7 +32,7 @@ def load_data(config):
         device='cpu',
         batch_size=config.batch_size,
         train=False,
-        #augment=False
+        augment=False
     )
 
     probe_wall_val_ds = create_wall_dataloader(
@@ -42,7 +41,7 @@ def load_data(config):
         device='cpu',
         batch_size=config.batch_size,
         train=False,
-        #augment=False
+        augment=False
     )
 
     probe_val_ds = {
@@ -73,8 +72,8 @@ def evaluate_model():
     evaluator = ProbingEvaluator(
         device=config.device,
         model=model,
-        probe_train_ds=probe_train_ds,  # DataLoader now
-        probe_val_ds=probe_val_ds,      # Dict of DataLoaders now
+        probe_train_ds=probe_train_ds,
+        probe_val_ds=probe_val_ds,
         config=ProbingConfig(),
         quick_debug=False,
     )
