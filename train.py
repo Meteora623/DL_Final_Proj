@@ -15,18 +15,38 @@ class TrainConfig:
     batch_size = 64
     num_workers = 4
     lr = 1e-3
-    epochs = 1
+    epochs = 20  # Increased epochs for better learning
     repr_dim = 256
     action_dim = 2
     model_weights_path = 'model_weights.pth'
 
-def compute_loss(pred_encs, target_encs):
-    # BYOL-like loss
+def vicreg_loss(pred_encs, target_encs, sim_weight=25.0, var_weight=25.0, cov_weight=1.0):
+    # VICReg-like loss
+    # pred_encs, target_encs: [T, B, D]
     T, B, D = pred_encs.shape
     pred = pred_encs.view(T*B, D)
     target = target_encs.view(T*B, D).detach()
-    cos_sim = F.cosine_similarity(pred, target, dim=-1).mean()
-    loss = 2 - 2 * cos_sim
+
+    # Invariance term (mean squared error)
+    invariance_loss = F.mse_loss(pred, target)
+
+    # Variance term: ensure each dimension of embeddings in a batch have unit variance
+    def var_term(x):
+        std = torch.sqrt(x.var(dim=0) + 1e-4)
+        return torch.mean(F.relu(1 - std))
+
+    var_loss = var_term(pred) + var_term(target)
+
+    # Covariance term: decorrelate the dimensions
+    def cov_term(x):
+        x_centered = x - x.mean(dim=0, keepdim=True)
+        cov = (x_centered.T @ x_centered) / (x_centered.size(0)-1)
+        off_diag = cov.flatten()[:-1].view(cov.size(0)-1, cov.size(1)+1)[:,1:].flatten()
+        return (off_diag**2).mean()
+
+    cov_loss = cov_term(pred) + cov_term(target)
+
+    loss = sim_weight * invariance_loss + var_weight * var_loss + cov_weight * cov_loss
     return loss
 
 def main():
@@ -36,7 +56,7 @@ def main():
         data_path=config.data_path,
         probing=False,
         device='cpu',
-        #augment=False
+        augment=False
     )
 
     train_loader = DataLoader(
@@ -79,7 +99,7 @@ def main():
                     target_encs_list.append(s_prime_t)
             target_encs = torch.stack(target_encs_list, dim=0) # [T, B, D]
 
-            loss = compute_loss(pred_encs, target_encs)
+            loss = vicreg_loss(pred_encs, target_encs)
             loss.backward()
             optimizer.step()
             model.update_target_encoder(momentum=0.99)
