@@ -1,3 +1,4 @@
+# evaluator.py
 from typing import NamedTuple, List, Any, Optional, Dict
 from itertools import chain
 from dataclasses import dataclass
@@ -8,7 +9,6 @@ from tqdm.auto import tqdm
 import numpy as np
 from matplotlib import pyplot as plt
 
-from schedulers import Scheduler, LRSchedule
 from models import Prober
 from configs import ConfigBase
 
@@ -18,12 +18,11 @@ from normalizer import Normalizer
 @dataclass
 class ProbingConfig(ConfigBase):
     probe_targets: str = "locations"
-    lr: float = 0.0002
+    lr: float = 1e-3
     epochs: int = 20
-    schedule: LRSchedule = LRSchedule.Cosine
+    schedule: str = "cosine"  # Simplified scheduler
     sample_timesteps: int = 30
-    prober_arch: str = "256"
-
+    prober_arch: str = "256-256"
 
 def location_losses(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     assert pred.shape == target.shape
@@ -58,90 +57,76 @@ class ProbingEvaluator:
 
         if self.quick_debug:
             epochs = 1
-        test_batch = next(iter(dataset))
+        # Get the shape of the target locations
+        for batch in dataset:
+            target_shape = batch.locations.shape[2:]  # Assuming [B, T, 2]
+            break
 
-        prober_output_shape = getattr(test_batch, "locations")[0, 0].shape
         prober = Prober(
-            repr_dim,
-            config.prober_arch,
-            output_shape=prober_output_shape,
+            embedding=repr_dim,
+            arch=config.prober_arch,
+            output_shape=target_shape,
         ).to(self.device)
 
-        all_parameters = list(prober.parameters())
-        optimizer_pred_prober = torch.optim.Adam(all_parameters, config.lr)
-        step = 0
-        batch_size = dataset.batch_size
-        batch_steps = None
+        optimizer_pred_prober = torch.optim.Adam(prober.parameters(), lr=config.lr)
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_pred_prober, T_max=epochs)
 
-        scheduler = Scheduler(
-            schedule=self.config.schedule,
-            base_lr=config.lr,
-            data_loader=dataset,
-            epochs=epochs,
-            optimizer=optimizer_pred_prober,
-            batch_steps=batch_steps,
-            batch_size=batch_size,
-        )
+        prober.train()
 
-        for epoch in tqdm(range(epochs), desc=f"Probe prediction epochs"):
+        for epoch in tqdm(range(epochs), desc="Probe prediction epochs"):
+            epoch_loss = 0.0
             for batch in tqdm(dataset, desc="Probe prediction step"):
-                # TODO: Forward pass through your model
                 init_states = batch.states[:, 0:1]  # [B, 1, C, H, W]
                 actions = batch.actions  # [B, T-1, 2]
-                pred_encs = model(states=init_states, actions=actions)  # [T, B, D]
+                locations = batch.locations  # [B, T, 2]
 
-                pred_encs = pred_encs.detach()
-                n_steps = pred_encs.shape[0]
-                bs = pred_encs.shape[1]
+                init_states = init_states.to(self.device)
+                actions = actions.to(self.device)
+                locations = locations.to(self.device)
 
-                target = getattr(batch, "locations").to(self.device)
-                target = self.normalizer.normalize_location(target)
+                with torch.no_grad():
+                    pred_encs = model(init_states, actions)  # [T, B, D]
 
-                if (
-                    config.sample_timesteps is not None
-                    and config.sample_timesteps < n_steps
-                ):
-                    sample_shape = (config.sample_timesteps,) + pred_encs.shape[1:]
-                    sampled_pred_encs = torch.empty(
-                        sample_shape,
-                        dtype=pred_encs.dtype,
-                        device=pred_encs.device,
-                    )
-                    sampled_target_locs = torch.empty(bs, config.sample_timesteps, 2, device=self.device)
-                    for i in range(bs):
-                        indices = torch.randperm(n_steps)[: config.sample_timesteps]
-                        sampled_pred_encs[:, i, :] = pred_encs[indices, i, :]
-                        sampled_target_locs[i, :] = target[i, indices]
+                pred_encs = pred_encs.permute(1, 0, 2)  # [B, T, D]
+                pred_encs = pred_encs.reshape(-1, pred_encs.shape[-1])  # [B*T, D]
 
-                    pred_encs = sampled_pred_encs
-                    target = sampled_target_locs
+                # Normalize locations
+                locations_norm = self.normalizer.normalize_location(locations)  # [B, T, 2]
+                locations_norm = locations_norm.reshape(-1, locations_norm.shape[-1])  # [B*T, 2]
 
-                pred_locs = torch.stack([prober(x) for x in pred_encs], dim=1)
-                losses = location_losses(pred_locs, target)
-                per_probe_loss = losses.mean()
+                # Forward pass through prober
+                pred_locs = prober(pred_encs)  # [B*T, 2]
 
-                if step % 100 == 0:
-                    print(f"normalized pred locations loss {per_probe_loss.item()}")
+                # Compute MSE loss
+                loss = F.mse_loss(pred_locs, locations_norm)
 
                 optimizer_pred_prober.zero_grad()
-                loss = per_probe_loss
                 loss.backward()
                 optimizer_pred_prober.step()
 
-                lr = scheduler.adjust_learning_rate(step)
-                step += 1
-                if self.quick_debug and step > 2:
+                epoch_loss += loss.item()
+
+                if (epoch * len(dataset) + 0) % 100 == 0:
+                    print(f"normalized pred locations loss {loss.item()}")
+
+                if self.quick_debug:
                     break
+
+            avg_loss = epoch_loss / len(dataset)
+            print(f"Epoch [{epoch+1}/{epochs}] - Average Probing Loss: {avg_loss:.4f}")
+            scheduler.step()
+
+        prober.eval()
         return prober
 
     @torch.no_grad()
     def evaluate_all(self, prober):
         avg_losses = {}
-        for prefix, val_ds in self.val_ds.items():
-            avg_losses[prefix] = self.evaluate_pred_prober(
+        for dataset_name, val_ds in self.val_ds.items():
+            avg_losses[dataset_name] = self.evaluate_pred_prober(
                 prober=prober,
                 val_ds=val_ds,
-                prefix=prefix,
+                prefix=dataset_name,
             )
         return avg_losses
 
@@ -154,20 +139,36 @@ class ProbingEvaluator:
         prober.eval()
 
         for idx, batch in enumerate(tqdm(val_ds, desc="Eval probe pred")):
-            # TODO: Forward pass through your model
-            init_states = batch.states[:, 0:1]
-            actions = batch.actions
-            pred_encs = model(states=init_states, actions=actions) # [T, B, D]
+            init_states = batch.states[:, 0:1]  # [B, 1, C, H, W]
+            actions = batch.actions  # [B, T-1, 2]
+            locations = batch.locations  # [B, T, 2]
 
-            target = getattr(batch, "locations").to(self.device)
-            target = self.normalizer.normalize_location(target)
+            init_states = init_states.to(self.device)
+            actions = actions.to(self.device)
+            locations = locations.to(self.device)
 
-            pred_locs = torch.stack([prober(x) for x in pred_encs], dim=1)
-            losses = location_losses(pred_locs, target)
-            probing_losses.append(losses.cpu())
+            with torch.no_grad():
+                pred_encs = model(init_states, actions)  # [T, B, D]
 
-        losses_t = torch.stack(probing_losses, dim=0).mean(dim=0)
-        losses_t = self.normalizer.unnormalize_mse(losses_t)
-        losses_t = losses_t.mean(dim=-1)
-        average_eval_loss = losses_t.mean().item()
+            pred_encs = pred_encs.permute(1, 0, 2)  # [B, T, D]
+            pred_encs = pred_encs.reshape(-1, pred_encs.shape[-1])  # [B*T, D]
+
+            # Normalize locations
+            locations_norm = self.normalizer.normalize_location(locations)
+            locations_norm = locations_norm.reshape(-1, locations_norm.shape[-1])  # [B*T, 2]
+
+            # Forward pass through prober
+            pred_locs = prober(pred_encs)  # [B*T, 2]
+
+            # Compute MSE loss
+            loss = F.mse_loss(pred_locs, locations_norm)
+            probing_losses.append(loss.item())
+
+            if quick_debug and idx > 2:
+                break
+
+        # Average loss
+        average_eval_loss = np.mean(probing_losses)
+        # Unnormalize the MSE
+        average_eval_loss = self.normalizer.unnormalize_mse(average_eval_loss)
         return average_eval_loss
