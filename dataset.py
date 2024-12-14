@@ -1,3 +1,4 @@
+# dataset.py
 from typing import NamedTuple
 import torch
 import numpy as np
@@ -7,6 +8,7 @@ class WallSample(NamedTuple):
     states: torch.Tensor
     locations: torch.Tensor
     actions: torch.Tensor
+    states_view2: torch.Tensor  # Second augmented view
 
 class WallDataset:
     def __init__(
@@ -17,6 +19,7 @@ class WallDataset:
         augment=False,
     ):
         self.device = device
+        self.probing = probing
         self.augment = augment
         self.states = np.load(f"{data_path}/states.npy", mmap_mode="r")
         self.actions = np.load(f"{data_path}/actions.npy")
@@ -25,30 +28,46 @@ class WallDataset:
         else:
             self.locations = None
 
-        # Simple augmentations if needed
-        self.augmentation_transforms = transforms.Compose([
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomVerticalFlip(p=0.5),
-        ])
+        # Define data augmentation transforms
+        if self.augment:
+            self.augmentation_transforms = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.RandomResizedCrop(64, scale=(0.8, 1.0)),
+                transforms.RandomHorizontalFlip(),
+                transforms.RandomVerticalFlip(),
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.4, hue=0.1),
+                transforms.ToTensor(),
+            ])
+        else:
+            self.augmentation_transforms = transforms.Compose([
+                transforms.ToTensor(),
+            ])
 
     def __len__(self):
         return len(self.states)
 
     def __getitem__(self, i):
-        state_np = self.states[i].copy()
-        action_np = self.actions[i].copy()
+        state_np = self.states[i].copy()  # [T, C, H, W]
+        action_np = self.actions[i].copy()  # [T-1, action_dim]
 
-        states = torch.from_numpy(state_np).float()
+        # Apply augmentation to each frame for view1
+        states = []
+        for frame in state_np:
+            frame = self.augmentation_transforms(frame)
+            states.append(frame)
+        states = torch.stack(states)  # [T, C, H, W]
+
+        # Apply a different augmentation for the second view
+        states_view2 = []
+        for frame in state_np:
+            frame = self.augmentation_transforms(frame)
+            states_view2.append(frame)
+        states_view2 = torch.stack(states_view2)  # [T, C, H, W]
+
         actions = torch.from_numpy(action_np).float()
 
-        if self.augment:
-            augmented_states = []
-            for frame in states:
-                frame = self.augmentation_transforms(frame)
-                augmented_states.append(frame)
-            states = torch.stack(augmented_states)
-
         states = states.to(self.device)
+        states_view2 = states_view2.to(self.device)
         actions = actions.to(self.device)
 
         if self.locations is not None:
@@ -56,7 +75,7 @@ class WallDataset:
         else:
             locations = torch.empty(0, device=self.device)
 
-        return WallSample(states=states, locations=locations, actions=actions)
+        return WallSample(states=states, locations=locations, actions=actions, states_view2=states_view2)
 
 def create_wall_dataloader(
     data_path,
@@ -78,7 +97,8 @@ def create_wall_dataloader(
         batch_size=batch_size,
         shuffle=train,
         drop_last=True,
-        pin_memory=False,
+        pin_memory=True,
+        num_workers=4,
     )
 
     return loader
