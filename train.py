@@ -16,7 +16,7 @@ class TrainConfig:
     batch_size = 32  # Reduced batch size due to memory constraints with ResNet50
     num_workers = 4
     lr = 1e-4  # Reduced learning rate for stability
-    epochs = 50  # Increased epochs for better learning
+    epochs = 3  # Increased epochs for better learning
     repr_dim = 256
     action_dim = 2
     model_weights_path = 'model_weights.pth'
