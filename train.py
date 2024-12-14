@@ -1,3 +1,4 @@
+# train.py
 import torch
 import torch.nn.functional as F
 import torch.optim as optim
@@ -12,20 +13,22 @@ from normalizer import Normalizer
 class TrainConfig:
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     data_path = '/scratch/DL24FA/train'
-    batch_size = 64
+    batch_size = 32  # Reduced batch size due to memory constraints with ResNet50
     num_workers = 4
-    lr = 1e-3
-    epochs = 2  # Increased epochs for better learning
+    lr = 1e-4  # Reduced learning rate for stability
+    epochs = 50  # Increased epochs for better learning
     repr_dim = 256
     action_dim = 2
     model_weights_path = 'model_weights.pth'
 
 def vicreg_loss(pred_encs, target_encs, sim_weight=25.0, var_weight=25.0, cov_weight=1.0):
-    # VICReg-like loss
+    """
+    VICReg-like loss function.
+    """
     # pred_encs, target_encs: [T, B, D]
     T, B, D = pred_encs.shape
-    pred = pred_encs.view(T*B, D)
-    target = target_encs.view(T*B, D).detach()
+    pred = pred_encs.view(T * B, D)
+    target = target_encs.view(T * B, D).detach()
 
     # Invariance term (mean squared error)
     invariance_loss = F.mse_loss(pred, target)
@@ -56,7 +59,7 @@ def main():
         data_path=config.data_path,
         probing=False,
         device='cpu',
-        augment=False
+        augment=True  # Enable data augmentation
     )
 
     train_loader = DataLoader(
@@ -64,7 +67,7 @@ def main():
         batch_size=config.batch_size,
         shuffle=True,
         drop_last=True,
-        pin_memory=False,
+        pin_memory=True,
         num_workers=config.num_workers
     )
 
@@ -75,6 +78,8 @@ def main():
     ).to(config.device)
 
     optimizer = optim.Adam(model.parameters(), lr=config.lr)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.epochs)
+
     normalizer = Normalizer()
 
     model.train()
@@ -82,22 +87,25 @@ def main():
     for epoch in range(config.epochs):
         epoch_loss = 0.0
         for batch_idx, batch in enumerate(train_loader):
-            states = batch.states  # CPU
-            actions = batch.actions # CPU
+            states = batch.states  # [B, T, C, H, W]
+            actions = batch.actions  # [B, T-1, action_dim]
+            states_view2 = batch.states_view2  # [B, T, C, H, W]
+
             states = states.to(config.device)
+            states_view2 = states_view2.to(config.device)
             actions = actions.to(config.device)
 
             optimizer.zero_grad()
             pred_encs = model(states, actions)  # [T, B, D]
 
-            B, T_state, C, H, W = states.shape
-            T = actions.shape[1] + 1
+            # Compute target embeddings using target encoder on the second augmented view
+            T, B, D = pred_encs.shape
             target_encs_list = []
             with torch.no_grad():
                 for t in range(T):
-                    s_prime_t = model.target_encoder(states[:, t])
+                    s_prime_t = model.target_encoder(states_view2[:, t])
                     target_encs_list.append(s_prime_t)
-            target_encs = torch.stack(target_encs_list, dim=0) # [T, B, D]
+            target_encs = torch.stack(target_encs_list, dim=0)  # [T, B, D]
 
             loss = vicreg_loss(pred_encs, target_encs)
             loss.backward()
@@ -111,6 +119,8 @@ def main():
 
         avg_loss = epoch_loss / len(train_loader)
         print(f"Epoch [{epoch+1}/{config.epochs}] - Average Loss: {avg_loss:.4f}")
+
+        scheduler.step()
 
     torch.save(model.state_dict(), config.model_weights_path)
     print(f"Model weights saved to {config.model_weights_path}")
