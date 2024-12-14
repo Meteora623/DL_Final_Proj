@@ -1,11 +1,17 @@
+# main.py
 import torch
-from configs import ConfigBase
+from dataclasses import dataclass
 from evaluator import ProbingEvaluator, ProbingConfig
 from dataset import create_wall_dataloader
 
+@dataclass
+class ConfigBase:
+    pass
+
+@dataclass
 class MainConfig(ConfigBase):
     device: str = 'cuda' if torch.cuda.is_available() else 'cpu'
-    batch_size: int = 64
+    batch_size: int = 32  # Match train.py's batch size
     num_workers: int = 4
     repr_dim: int = 256
     action_dim: int = 2
@@ -20,16 +26,16 @@ def load_data(config):
     probe_train_ds = create_wall_dataloader(
         data_path=probe_train_path,
         probing=True,
-        device='cpu',
+        device=config.device,
         batch_size=config.batch_size,
         train=True,
-        augment=False
+        augment=False  # Typically no augmentation during probing
     )
 
     probe_normal_val_ds = create_wall_dataloader(
         data_path=probe_normal_val_path,
         probing=True,
-        device='cpu',
+        device=config.device,
         batch_size=config.batch_size,
         train=False,
         augment=False
@@ -38,7 +44,7 @@ def load_data(config):
     probe_wall_val_ds = create_wall_dataloader(
         data_path=probe_wall_val_path,
         probing=True,
-        device='cpu',
+        device=config.device,
         batch_size=config.batch_size,
         train=False,
         augment=False
@@ -59,6 +65,8 @@ def load_model(config):
         action_dim=config.action_dim,
         device=config.device
     ).to(config.device)
+    if not os.path.exists(config.model_weights_path):
+        raise FileNotFoundError(f"Model weights not found at {config.model_weights_path}")
     model.load_state_dict(torch.load(config.model_weights_path, map_location=config.device))
     model.eval()
     return model
