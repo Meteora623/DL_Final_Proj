@@ -1,8 +1,10 @@
+# models.py
 from typing import List
 import numpy as np
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torchvision import models
 
 def build_mlp(layers_dims: List[int]):
     layers = []
@@ -13,31 +15,19 @@ def build_mlp(layers_dims: List[int]):
     layers.append(nn.Linear(layers_dims[-2], layers_dims[-1]))
     return nn.Sequential(*layers)
 
-class Encoder(nn.Module):
+class ResNetEncoder(nn.Module):
     def __init__(self, repr_dim=256):
         super().__init__()
-        self.conv_layers = nn.Sequential(
-            nn.Conv2d(2, 32, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
-            nn.BatchNorm2d(256),
-            nn.ReLU(inplace=True),
-        )
-        # Assuming final feature map might be 5x5 if input is 64x64
-        self.fc = nn.Linear(256*5*5, repr_dim)
+        # Use ResNet50 as the encoder
+        self.encoder = models.resnet50(pretrained=False)
+        self.encoder.conv1 = nn.Conv2d(2, 64, kernel_size=7, stride=2, padding=3, bias=False)  # Modify for 2-channel input
+        self.encoder.fc = nn.Identity()  # Remove the final classification layer
+        self.projection = nn.Linear(2048, repr_dim)  # ResNet50 outputs 2048-dim features
 
     def forward(self, x):
-        x = self.conv_layers(x)
-        batch_size = x.size(0)
-        x = x.view(batch_size, -1)
-        x = self.fc(x)
+        # x: [B, C, H, W]
+        x = self.encoder(x)  # [B, 2048]
+        x = self.projection(x)  # [B, repr_dim]
         x = F.normalize(x, dim=1)
         return x
 
@@ -65,10 +55,10 @@ class JEPA_Model(nn.Module):
         self.repr_dim = repr_dim
         self.action_dim = action_dim
 
-        self.encoder = Encoder(repr_dim=self.repr_dim)
+        self.encoder = ResNetEncoder(repr_dim=self.repr_dim)
         self.predictor = Predictor(repr_dim=self.repr_dim, action_dim=self.action_dim)
 
-        self.target_encoder = Encoder(repr_dim=self.repr_dim)
+        self.target_encoder = ResNetEncoder(repr_dim=self.repr_dim)
         self._initialize_target_encoder()
 
     def _initialize_target_encoder(self):
@@ -81,16 +71,21 @@ class JEPA_Model(nn.Module):
             param_k.data = param_k.data * momentum + param_q.data * (1.0 - momentum)
 
     def forward(self, states, actions):
+        """
+        states: [B, T, C, H, W]
+        actions: [B, T-1, action_dim]
+        """
         B, T_state, C, H, W = states.shape
-        T = actions.shape[1] + 1
+        T = actions.shape[1] + 1  # Including initial state
         pred_encs = []
 
-        s_t = self.encoder(states[:, 0].to(self.device))
+        # Initial state embedding
+        s_t = self.encoder(states[:, 0].to(self.device))  # [B, D]
         pred_encs.append(s_t)
 
         for t in range(T - 1):
-            a_t = actions[:, t].to(self.device)
-            s_tilde = self.predictor(s_t, a_t)
+            a_t = actions[:, t].to(self.device)  # [B, action_dim]
+            s_tilde = self.predictor(s_t, a_t)  # [B, D]
             pred_encs.append(s_tilde)
             s_t = s_tilde
 
