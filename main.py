@@ -3,6 +3,7 @@ import torch
 from dataclasses import dataclass
 from evaluator import ProbingEvaluator, ProbingConfig
 from dataset import create_wall_dataloader
+import os  # Added import
 
 @dataclass
 class ConfigBase:
