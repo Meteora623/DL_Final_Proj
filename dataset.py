@@ -3,6 +3,7 @@ from typing import NamedTuple
 import torch
 import numpy as np
 import torchvision.transforms as transforms
+from PIL import Image
 
 class WallSample(NamedTuple):
     states: torch.Tensor
@@ -21,10 +22,10 @@ class WallDataset:
         self.device = device
         self.probing = probing
         self.augment = augment
-        self.states = np.load(f"{data_path}/states.npy", mmap_mode="r")
-        self.actions = np.load(f"{data_path}/actions.npy")
+        self.states = np.load(f"{data_path}/states.npy", mmap_mode="r")  # Shape: [N, T, C, H, W]
+        self.actions = np.load(f"{data_path}/actions.npy")  # Shape: [N, T-1, action_dim]
         if probing:
-            self.locations = np.load(f"{data_path}/locations.npy")
+            self.locations = np.load(f"{data_path}/locations.npy")  # Shape: [N, T, 2]
         else:
             self.locations = None
 
@@ -50,18 +51,29 @@ class WallDataset:
         state_np = self.states[i].copy()  # [T, C, H, W]
         action_np = self.actions[i].copy()  # [T-1, action_dim]
 
+        # Verify the number of channels
+        _, C, H, W = state_np.shape
+        expected_channels = 2  # As per your model's first conv layer
+
+        if C != expected_channels:
+            raise ValueError(f"Expected {expected_channels} channels, but got {C} channels in state {i}.")
+
         # Apply augmentation to each frame for view1
         states = []
         for frame in state_np:
-            frame = self.augmentation_transforms(frame)
-            states.append(frame)
+            # Convert to [H, W, C] for PIL
+            frame_pil = frame.transpose(1, 2, 0)  # [H, W, C]
+            frame_aug = self.augmentation_transforms(frame_pil)  # [C, H, W]
+            states.append(frame_aug)
         states = torch.stack(states)  # [T, C, H, W]
 
         # Apply a different augmentation for the second view
         states_view2 = []
         for frame in state_np:
-            frame = self.augmentation_transforms(frame)
-            states_view2.append(frame)
+            # Convert to [H, W, C] for PIL
+            frame_pil = frame.transpose(1, 2, 0)  # [H, W, C]
+            frame_aug = self.augmentation_transforms(frame_pil)  # [C, H, W]
+            states_view2.append(frame_aug)
         states_view2 = torch.stack(states_view2)  # [T, C, H, W]
 
         actions = torch.from_numpy(action_np).float()
@@ -71,7 +83,7 @@ class WallDataset:
         actions = actions.to(self.device)
 
         if self.locations is not None:
-            locations = torch.from_numpy(self.locations[i].copy()).float().to(self.device)
+            locations = torch.from_numpy(self.locations[i].copy()).float().to(self.device)  # [T, 2]
         else:
             locations = torch.empty(0, device=self.device)
 
